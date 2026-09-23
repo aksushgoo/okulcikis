@@ -1,9 +1,203 @@
 <!DOCTYPE html>
-<html>
+<html lang="tr">
 <head>
-  <title>Okul Çıkış</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Öğrenci Çıkış Kontrolü (Hızlı Mod)</title>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root {
+    --ink: #0f1b1a; --paper: #f2f7f5; --line: #c8d6d2; --accent: #0f6b5c;
+    --ok: #1a7a4c; --ok-bg: #e3f5ea; --warn: #a3660a; --warn-bg: #fdf1de;
+    --err: #a3271e; --err-bg: #fbe6e4;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef5f3; --paper: #0f1a18; --line: #264541; --accent: #3ecfb0;
+      --ok: #4fd18c; --ok-bg: #123a26; --warn: #f2b754; --warn-bg: #3a2c0e;
+      --err: #f0837a; --err-bg: #3d1815;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+  main { max-width: 480px; width: 100%; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+  header h1 { font-size: 1.25rem; margin: 0; }
+
+  .bigbtn { background: var(--accent); color: #ffffff; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: 600; padding: 18px; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: opacity 0.2s; }
+  .bigbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .linkbtn { background: none; border: none; color: var(--accent); text-decoration: underline; font-size: 0.85rem; cursor: pointer; padding: 4px; align-self: center; }
+
+  #reader { width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); min-height: 220px; background: #000; }
+  #reader video { border-radius: 12px; }
+  #reader img, #reader__dashboard_section_csr button { display: none !important; }
+
+  .result { border-radius: 12px; padding: 20px; min-height: 110px; text-align: center; border: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+  .result.idle { opacity: 0.6; }
+  .result.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+  .result.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+  .result.err { background: var(--err-bg); color: var(--err); border-color: var(--err); }
+  .result .name { font-size: 1.5rem; font-weight: bold; }
+  .result .meta { font-size: 0.95rem; }
+
+  .log { border-top: 1px solid var(--line); padding-top: 12px; }
+  .log h2 { font-size: 0.8rem; text-transform: uppercase; opacity: 0.6; margin: 0 0 10px; }
+  .log ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto; }
+  .log li { display: flex; justify-content: space-between; font-size: 0.9rem; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .hidden { display: none !important; }
+</style>
 </head>
 <body>
-  <h1>Merhaba</h1>
+
+<main>
+  <header>
+    <h1>Öğrenci Çıkış Kontrolü</h1>
+  </header>
+
+  <button class="bigbtn" id="startBtn" disabled>⏳ Liste Yükleniyor...</button>
+
+  <div id="reader" class="hidden"></div>
+  <button class="linkbtn hidden" id="manualFallbackLink">Kamera açılmıyor mu? Fotoğraf çekerek dene</button>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+  <button class="bigbtn hidden" id="snapBtn">📷 QR Kodun Fotoğrafını Çek</button>
+
+  <div class="result idle" id="result">Öğrenci listesinin inmesi bekleniyor...</div>
+
+  <div class="log">
+    <h2>Son Taramalar</h2>
+    <ul id="logList"></ul>
+  </div>
+</main>
+
+<script>
+(function(){
+  const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyri1cvRuLphDg7yVA-SSvT3whYUg3Fdaf7BtlASF-e4I43wnQKzwT9ZcyMvWE7-2C3GA/exec";
+
+  const startBtn = document.getElementById('startBtn');
+  const readerEl = document.getElementById('reader');
+  const resultEl = document.getElementById('result');
+  const logList = document.getElementById('logList');
+  const html5QrCode = new Html5Qrcode("reader");
+  
+  let studentsDb = {};
+  let isDbLoaded = false;
+  let isProcessing = false;
+
+  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR
+  window.addEventListener('DOMContentLoaded', async () => {
+    try {
+      const res = await fetch(DEFAULT_SCRIPT_URL + '?action=getStudents', { method: 'GET', mode: 'cors', credentials: 'omit' });
+      const data = await res.json();
+      
+      if(data.success) {
+        studentsDb = data.students;
+        isDbLoaded = true;
+        setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
+        startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
+        startBtn.disabled = false;
+      } else {
+        setResult('err', 'Liste alınamadı: ' + data.error);
+      }
+    } catch(err) {
+      setResult('err', 'İnternet bağlantısı koptu. Lütfen sayfayı yenileyin.');
+    }
+  });
+
+  function playFeedback(type) {
+    if ('vibrate' in navigator) {
+      if (type === 'ok') navigator.vibrate([100, 50, 100]);
+      else if (type === 'warn') navigator.vibrate([200]);
+      else if (type === 'err') navigator.vibrate([300, 100, 300]);
+    }
+  }
+
+  function setResult(state, html) {
+    resultEl.className = 'result ' + state;
+    resultEl.innerHTML = html;
+  }
+
+  function addLog(name, time, status) {
+    const li = document.createElement('li');
+    const symbol = status === 'ok' ? '✅' : status === 'warn' ? '⚠️' : '❌';
+    li.innerHTML = `<span>${symbol} <b>${name}</b></span><span>${time}</span>`;
+    logList.insertBefore(li, logList.firstChild);
+  }
+
+  // 2. ADIM: KAMERAYI BAŞLAT
+  startBtn.addEventListener('click', () => {
+    startBtn.classList.add('hidden');
+    readerEl.classList.remove('hidden');
+    setResult('idle', 'Kamera açılıyor...');
+
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      async (decodedText) => {
+        if (isProcessing) return;
+        isProcessing = true;
+        await handleId(decodedText.trim());
+        setTimeout(() => { isProcessing = false; }, 1500);
+      },
+      () => {}
+    ).then(() => {
+      setResult('idle', 'QR kod okutulmayı bekliyor...');
+    }).catch((err) => {
+      setResult('err', 'Kamera başlatılamadı. İzin verdiğinizden emin olun.');
+    });
+  });
+
+  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL
+  async function handleId(id) {
+    if(!isDbLoaded) return;
+    
+    const student = studentsDb[id];
+    const nowTime = new Date().toLocaleTimeString('tr-TR', {hour:'2-digit', minute:'2-digit'});
+
+    // 1. Öğrenci Bulunamadı
+    if(!student) {
+      playFeedback('err');
+      setResult('err', '<div class="name">Kayıt Bulunamadı</div><div class="meta">Böyle bir barkod yok.</div>');
+      addLog('Bilinmeyen QR', nowTime, 'err');
+      return;
+    }
+
+    // 2. Cuma Namazı Çıkış Kontrolü
+    const todayDay = new Date().getDay(); // 0=Pazar, 1=Pzt ... 5=Cuma
+    if (student.group === 'Cuma' && todayDay !== 5) {
+      playFeedback('err');
+      setResult('err', `<div class="name">${student.name}</div><div class="meta" style="font-weight:bold; margin-top:5px;">⚠️ Bu öğrenci SADECE Cuma günleri çıkabilir!</div>`);
+      addLog(student.name + ' (Sadece Cuma)', nowTime, 'err');
+      return;
+    }
+
+    // 3. Zaten Çıkış Yapmış
+    if(student.scannedToday) {
+      playFeedback('err'); 
+      setResult('err', `
+        <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin: -5px 0;">
+          <div style="font-size: 2.2rem; line-height: 1;">❗</div>
+          <div style="text-align: left;">
+            <div class="name" style="font-size: 1.25rem; line-height: 1.1;">${student.name}</div>
+            <div style="font-size: 1rem; font-weight: bold; margin-top: 3px;">TEKRAR ÇIKIŞ YAPILAMAZ!</div>
+          </div>
+        </div>
+      `);
+      addLog(student.name, nowTime, 'err');
+    }
+    // 4. İlk Çıkış (Başarılı)
+    else {
+      playFeedback('ok');
+      student.scannedToday = true;
+      setResult('ok', `<div class="name">${student.name}</div><div>✅ ÇIKABİLİR!</div>`);
+      addLog(student.name, nowTime, 'ok');
+
+      fetch(DEFAULT_SCRIPT_URL + '?action=logScan&id=' + encodeURIComponent(id), {
+        method: 'GET', mode: 'cors', credentials: 'omit'
+      }).catch(e => console.log("Arka planda yazma gecikti", e));
+    }
+  }
+})();
+</script>
 </body>
 </html>
