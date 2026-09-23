@@ -125,27 +125,38 @@
   }
 
   // 2. ADIM: KAMERAYI BAŞLAT
-  startBtn.addEventListener('click', () => {
-    startBtn.classList.add('hidden');
-    readerEl.classList.remove('hidden');
-    setResult('idle', 'Kamera açılıyor...');
+ startBtn.addEventListener('click', async () => {
+  startBtn.classList.add('hidden');
+  readerEl.classList.remove('hidden');
+  setResult('idle', 'Kamera açılıyor...');
 
-    html5QrCode.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      async (decodedText) => {
-        if (isProcessing) return;
-        isProcessing = true;
-        await handleId(decodedText.trim());
-        setTimeout(() => { isProcessing = false; }, 1500);
-      },
-      () => {}
-    ).then(() => {
+  const qrConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
+  const qrCallback = async (decodedText) => {
+    if (isProcessing) return;
+    isProcessing = true;
+    await handleId(decodedText.trim());
+    setTimeout(() => { isProcessing = false; }, 1500);
+  };
+
+  try {
+    // 1. Önce standart yöntemi dene (Android'de zaten sorunsuz çalışıyor)
+    await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
+    setResult('idle', 'QR kod okutulmayı bekliyor...');
+  } catch (firstErr) {
+    // 2. Başarısız olursa (genelde bazı iPhone modellerinde), kamerayı listeden seç
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      if (!cameras || cameras.length === 0) throw new Error('Kamera bulunamadı');
+      const backCam = cameras.find(c => /back|rear|arka/i.test(c.label));
+      const cameraId = (backCam || cameras[cameras.length - 1]).id;
+
+      await html5QrCode.start(cameraId, qrConfig, qrCallback, () => {});
       setResult('idle', 'QR kod okutulmayı bekliyor...');
-    }).catch((err) => {
-      setResult('err', 'Kamera başlatılamadı. İzin verdiğinizden emin olun.');
-    });
-  });
+    } catch (secondErr) {
+      setResult('err', 'Kamera başlatılamadı: ' + (secondErr.message || secondErr));
+    }
+  }
+});
 
   // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL
   async function handleId(id) {
