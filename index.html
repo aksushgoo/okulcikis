@@ -70,10 +70,9 @@
   </div>
 </main>
 
-<script>
 (function(){
-  // BURA ÇOK ÖNEMLİ: Kendi çalışan (AKfycbyri... olan) linkinizi kullanıyoruz
-  const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyri1cvRuLphDg7yVA-SSvT3whYUg3Fdaf7BtlASF-e4I43wnQKzwT9ZcyMvWE7-2C3GA/exec";
+  // BURA ÇOK ÖNEMLİ: Yeni Firebase Veritabanı Linkimiz
+  const FIREBASE_DB_URL = "https://okulcikistest-default-rtdb.firebaseio.com/";
 
   const startBtn = document.getElementById('startBtn');
   const readerEl = document.getElementById('reader');
@@ -85,52 +84,24 @@
   let isDbLoaded = false;
   let isProcessing = false;
 
-  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR (Kesin Çözüm - Zaman Aşımı Korumalı)
+  // 1. ADIM: SAYFA AÇILDIĞINDA FİREBASE'DEN LİSTEYİ İNDİR (Milisaniyeler Sürer)
   window.addEventListener('DOMContentLoaded', async () => {
-    let retries = 3;
-    let success = false;
-
-    while (retries > 0 && !success) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      try {
-        const fetchUrl = DEFAULT_SCRIPT_URL + '?action=getStudents&_t=' + new Date().getTime();
-
-        const res = await fetch(fetchUrl, { 
-          method: 'GET',
-          mode: 'cors',
-          signal: controller.signal 
-        });
-        
-        clearTimeout(timeoutId); 
-        
-        const textData = await res.text();
-        const data = JSON.parse(textData);
-        
-        if(data.success) {
-          studentsDb = data.students;
-          isDbLoaded = true;
-          success = true;
-          setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
-          startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
-          startBtn.disabled = false;
-        } else {
-          throw new Error(data.error || "Liste alınamadı.");
-        }
-
-      } catch(err) {
-        clearTimeout(timeoutId);
-        retries--;
-        
-        if (retries > 0) {
-          startBtn.innerText = `⏳ Sunucu gecikti, tekrar deneniyor... (Kalan: ${retries})`;
-          await new Promise(r => setTimeout(r, 1500)); 
-        } else {
-          setResult('err', 'Google Sunucularına ulaşılamıyor. Lütfen sayfayı yenileyin veya internetinizi kontrol edin.');
-          startBtn.innerText = "❌ Bağlantı Hatası";
-        }
+    try {
+      // Firebase'den veri çekerken linkin sonuna .json eklemek kuraldır
+      const res = await fetch(FIREBASE_DB_URL + 'students.json');
+      const data = await res.json();
+      
+      if(data) {
+        studentsDb = data;
+        isDbLoaded = true;
+        setResult('ok', '✅ Öğrenci listesi Firebase\'den ışık hızıyla yüklendi!');
+        startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
+        startBtn.disabled = false;
+      } else {
+        setResult('err', 'Veritabanı boş veya ulaşılamadı.');
       }
+    } catch(err) {
+      setResult('err', 'İnternet bağlantısı koptu. Lütfen sayfayı yenileyin.');
     }
   });
 
@@ -156,37 +127,37 @@
 
   // 2. ADIM: KAMERAYI BAŞLAT
   startBtn.addEventListener('click', async () => {
-  startBtn.classList.add('hidden');
-  readerEl.classList.remove('hidden');
-  setResult('idle', 'Kamera açılıyor...');
+    startBtn.classList.add('hidden');
+    readerEl.classList.remove('hidden');
+    setResult('idle', 'Kamera açılıyor...');
 
-  const qrConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
-  const qrCallback = async (decodedText) => {
-    if (isProcessing) return;
-    isProcessing = true;
-    await handleId(decodedText.trim());
-    setTimeout(() => { isProcessing = false; }, 1500);
-  };
+    const qrConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
+    const qrCallback = async (decodedText) => {
+      if (isProcessing) return;
+      isProcessing = true;
+      await handleId(decodedText.trim());
+      setTimeout(() => { isProcessing = false; }, 1500);
+    };
 
-  try {
-    await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
-    setResult('idle', 'QR kod okutulmayı bekliyor...');
-  } catch (firstErr) {
     try {
-      const cameras = await Html5Qrcode.getCameras();
-      if (!cameras || cameras.length === 0) throw new Error('Kamera bulunamadı');
-      const backCam = cameras.find(c => /back|rear|arka/i.test(c.label));
-      const cameraId = (backCam || cameras[cameras.length - 1]).id;
-
-      await html5QrCode.start(cameraId, qrConfig, qrCallback, () => {});
+      await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
       setResult('idle', 'QR kod okutulmayı bekliyor...');
-    } catch (secondErr) {
-      setResult('err', 'Kamera başlatılamadı: ' + (secondErr.message || secondErr));
-    }
-  }
-});
+    } catch (firstErr) {
+      try {
+        const cameras = await Html5Qrcode.getCameras();
+        if (!cameras || cameras.length === 0) throw new Error('Kamera bulunamadı');
+        const backCam = cameras.find(c => /back|rear|arka/i.test(c.label));
+        const cameraId = (backCam || cameras[cameras.length - 1]).id;
 
-  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL
+        await html5QrCode.start(cameraId, qrConfig, qrCallback, () => {});
+        setResult('idle', 'QR kod okutulmayı bekliyor...');
+      } catch (secondErr) {
+        setResult('err', 'Kamera başlatılamadı: ' + (secondErr.message || secondErr));
+      }
+    }
+  });
+
+  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL VE FİREBASE'E YAZMA
   async function handleId(id) {
     if(!isDbLoaded) return;
     
@@ -227,16 +198,18 @@
     // 4. İlk Çıkış (Başarılı)
     else {
       playFeedback('ok');
-      student.scannedToday = true;
+      student.scannedToday = true; // Telefon hafızasında anında güncelle
       setResult('ok', `<div class="name">${student.name}</div><div>✅ ÇIKABİLİR!</div>`);
       addLog(student.name, nowTime, 'ok');
 
-      fetch(DEFAULT_SCRIPT_URL + '?action=logScan&id=' + encodeURIComponent(id), {
-        method: 'GET', mode: 'cors', credentials: 'omit'
-      }).catch(e => console.log("Arka planda yazma gecikti", e));
+      // Arka planda Firebase'i güncelle (Sadece okutulan öğrencinin scannedToday değerini true yap)
+      fetch(FIREBASE_DB_URL + 'students/' + encodeURIComponent(id) + '.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scannedToday: true })
+      }).catch(e => console.log("Firebase yazma hatası", e));
     }
   }
 })();
-</script>
 </body>
 </html>
