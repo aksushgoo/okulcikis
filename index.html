@@ -84,46 +84,52 @@
   let isDbLoaded = false;
   let isProcessing = false;
 
-  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR (Güçlendirilmiş)
+  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR (Kesin Çözüm - Zaman Aşımı Korumalı)
   window.addEventListener('DOMContentLoaded', async () => {
-    let retries = 3; // Başarısız olursa 3 kez tekrar deneyecek
+    let retries = 3;
     let success = false;
 
     while (retries > 0 && !success) {
+      // Sonsuz beklemeyi (donmayı) önlemek için 5 saniyelik bir kronometre kuruyoruz
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
       try {
-        const res = await fetch(DEFAULT_SCRIPT_URL + '?action=getStudents', { 
-          method: 'GET', 
-          mode: 'cors', 
-          credentials: 'omit' 
+        // Google'ın hatalı önbelleğini atlatmak için sonuna anlık milisaniye değerini ekliyoruz
+        const fetchUrl = DEFAULT_SCRIPT_URL + '?action=getStudents&_t=' + new Date().getTime();
+
+        // fetch komutuna kronometremizi bağlıyoruz (signal)
+        const res = await fetch(fetchUrl, { 
+          method: 'GET',
+          mode: 'cors',
+          signal: controller.signal 
         });
         
-        // Google bazen hata anında JSON yerine HTML sayfası döndürür, bu da sistemi çökertir.
-        // Bu yüzden veriyi önce düz metin (text) olarak alıp kontrol ediyoruz.
-        const textData = await res.text();
+        clearTimeout(timeoutId); // Zamanında yanıt geldiyse kronometreyi durdur
         
-        try {
-          const data = JSON.parse(textData);
-          if(data.success) {
-            studentsDb = data.students;
-            isDbLoaded = true;
-            success = true; // Başarılı oldu, döngüyü kır
-            setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
-            startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
-            startBtn.disabled = false;
-          } else {
-            throw new Error(data.error || "Sunucu listesi alınamadı.");
-          }
-        } catch (parseErr) {
-          throw new Error("Google sunucusundan geçersiz yanıt geldi.");
+        const textData = await res.text();
+        const data = JSON.parse(textData);
+        
+        if(data.success) {
+          studentsDb = data.students;
+          isDbLoaded = true;
+          success = true;
+          setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
+          startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
+          startBtn.disabled = false;
+        } else {
+          throw new Error(data.error || "Liste alınamadı.");
         }
 
       } catch(err) {
+        clearTimeout(timeoutId); // Hata alınırsa veya iptal olursa kronometreyi sıfırla
         retries--;
+        
         if (retries > 0) {
-          startBtn.innerText = `⏳ Ağ zayıf, tekrar deneniyor... (Kalan: ${retries})`;
-          await new Promise(r => setTimeout(r, 2000)); // Yeni denemeden önce 2 saniye bekle
+          startBtn.innerText = `⏳ Sunucu gecikti, tekrar deneniyor... (Kalan: ${retries})`;
+          await new Promise(r => setTimeout(r, 1500)); // Yeni denemeden önce 1.5 saniye bekle
         } else {
-          setResult('err', 'İnternet bağlantısı koptu veya sunucu yanıt vermiyor. Lütfen sayfayı yenileyin.');
+          setResult('err', 'Google Sunucularına ulaşılamıyor. Lütfen sayfayı yenileyin veya internetinizi kontrol edin.');
           startBtn.innerText = "❌ Bağlantı Hatası";
         }
       }
