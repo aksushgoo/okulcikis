@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Öğrenci Çıkış Kontrolü (Işık Hızı)</title>
+<title>Öğrenci Çıkış Kontrolü (Hızlı + Arşivli)</title>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root {
@@ -72,8 +72,10 @@
 
 <script>
 (function(){
-  // BURA ÇOK ÖNEMLİ: Yeni Firebase Veritabanı Linkimiz
+  // 1. Yeni Hızlı Firebase Veritabanı Linkimiz
   const FIREBASE_DB_URL = "https://okulcikistest-default-rtdb.firebaseio.com/";
+  // 2. Eski Çalışan Google Sheets Arka Plan Kayıt Linkimiz
+  const GOOGLE_SHEETS_URL = "https://script.google.com/macros/s/AKfycbyri1cvRuLphDg7yVA-SSvT3whYUg3Fdaf7BtlASF-e4I43wnQKzwT9ZcyMvWE7-2C3GA/exec";
 
   const startBtn = document.getElementById('startBtn');
   const readerEl = document.getElementById('reader');
@@ -94,7 +96,7 @@
       if(data) {
         studentsDb = data;
         isDbLoaded = true;
-        setResult('ok', '✅ Öğrenci listesi Firebase\'den ışık hızıyla yüklendi!');
+        setResult('ok', '✅ Öğrenci listesi ışık hızıyla yüklendi!');
         startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
         startBtn.disabled = false;
       } else {
@@ -157,7 +159,7 @@
     }
   });
 
-  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL VE FİREBASE'E YAZMA
+  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL
   async function handleId(id) {
     if(!isDbLoaded) return;
     
@@ -195,19 +197,24 @@
       `);
       addLog(student.name, nowTime, 'err');
     }
-    // 4. İlk Çıkış (Başarılı)
+    // 4. İlk Çıkış (Başarılı) - HİBRİT KAYIT İŞLEMİ
     else {
       playFeedback('ok');
-      student.scannedToday = true; 
+      student.scannedToday = true; // Telefon hafızasını anında kilitler (hız için)
       setResult('ok', `<div class="name">${student.name}</div><div>✅ ÇIKABİLİR!</div>`);
       addLog(student.name, nowTime, 'ok');
 
-      // Arka planda Firebase'i güncelle
+      // İşlem A: Arka planda Firebase'i hızlıca kilitle (sayfa yenilense bile tekrar çıkamasın diye)
       fetch(FIREBASE_DB_URL + 'students/' + encodeURIComponent(id) + '.json', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scannedToday: true })
       }).catch(e => console.log("Firebase yazma hatası", e));
+
+      // İşlem B: Arka planda sessizce Google Sheets'e saati yaz (Arşiv için)
+      fetch(GOOGLE_SHEETS_URL + '?action=logScan&id=' + encodeURIComponent(id), {
+        method: 'GET', mode: 'cors', credentials: 'omit'
+      }).catch(e => console.log("Google Sheets yazma gecikti", e));
     }
   }
 })();
