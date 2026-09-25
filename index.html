@@ -58,9 +58,11 @@
   <button class="bigbtn" id="startBtn" disabled>⏳ Liste Yükleniyor...</button>
 
   <div id="reader" class="hidden"></div>
-  <button class="linkbtn hidden" id="manualFallbackLink">Kamera açılmıyor mu? Fotoğraf çekerek dene</button>
-  <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
-  <button class="bigbtn hidden" id="snapBtn">📷 QR Kodun Fotoğrafını Çek</button>
+  <button class="linkbtn hidden" id="manualToggleBtn">🔢 Kamera yerine numarayı elle gir</button>
+  <div class="hidden" id="manualEntry" style="display:flex; gap:8px;">
+    <input type="text" id="manualIdInput" inputmode="numeric" placeholder="Öğrenci ID / Okul No" style="flex:1; padding:14px; border-radius:10px; border:1px solid var(--line); font-size:1rem; background:var(--paper); color:var(--ink);">
+    <button class="bigbtn" id="manualSubmitBtn" style="width:auto; padding:14px 20px;">Gönder</button>
+  </div>
 
   <div class="result idle" id="result">Öğrenci listesinin inmesi bekleniyor...</div>
 
@@ -83,6 +85,10 @@
   const readerEl = document.getElementById('reader');
   const resultEl = document.getElementById('result');
   const logList = document.getElementById('logList');
+  const manualToggleBtn = document.getElementById('manualToggleBtn');
+  const manualEntry = document.getElementById('manualEntry');
+  const manualIdInput = document.getElementById('manualIdInput');
+  const manualSubmitBtn = document.getElementById('manualSubmitBtn');
   const html5QrCode = new Html5Qrcode("reader");
   
   let studentsDb = {};
@@ -158,6 +164,27 @@
     logList.insertBefore(li, logList.firstChild);
   }
 
+  // ELLE GİRİŞ: Kamera yerine öğrenci ID'sini yazarak gönderme
+  manualToggleBtn.addEventListener('click', () => {
+    manualEntry.classList.toggle('hidden');
+    if (!manualEntry.classList.contains('hidden')) manualIdInput.focus();
+  });
+
+  async function submitManualId() {
+    const id = manualIdInput.value.trim();
+    if (!id || isProcessing) return;
+    isProcessing = true;
+    await handleId(id);
+    manualIdInput.value = '';
+    manualIdInput.focus();
+    setTimeout(() => { isProcessing = false; }, 800);
+  }
+
+  manualSubmitBtn.addEventListener('click', submitManualId);
+  manualIdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitManualId();
+  });
+
   // 2. ADIM: KAMERAYI BAŞLAT
   startBtn.addEventListener('click', async () => {
     startBtn.classList.add('hidden');
@@ -175,6 +202,7 @@
     try {
       await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
       setResult('idle', 'QR kod okutulmayı bekliyor...');
+      manualToggleBtn.classList.remove('hidden'); // Kamera çalışıyor: yedek link elinin altında dursun
     } catch (firstErr) {
       try {
         const cameras = await Html5Qrcode.getCameras();
@@ -184,8 +212,13 @@
 
         await html5QrCode.start(cameraId, qrConfig, qrCallback, () => {});
         setResult('idle', 'QR kod okutulmayı bekliyor...');
+        manualToggleBtn.classList.remove('hidden'); // Kamera çalışıyor: yedek link elinin altında dursun
       } catch (secondErr) {
         setResult('err', 'Kamera başlatılamadı: ' + (secondErr.message || secondErr));
+        // Kamera tamamen başarısız oldu: elle giriş kutusunu otomatik aç
+        manualToggleBtn.classList.remove('hidden');
+        manualEntry.classList.remove('hidden');
+        manualIdInput.focus();
       }
     }
   });
