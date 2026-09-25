@@ -72,8 +72,8 @@
 
 <script>
 (function(){
-  const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGsZpyv6Wi_h4LN6rErwtJ57P3mUQBX6m7-ihGfS8VL33xa0Ubfoch8rq3Vk7pIf0ysg/exec";
-  
+  // BURA ÇOK ÖNEMLİ: Kendi çalışan (AKfycbyri... olan) linkinizi kullanıyoruz
+  const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyri1cvRuLphDg7yVA-SSvT3whYUg3Fdaf7BtlASF-e4I43wnQKzwT9ZcyMvWE7-2C3GA/exec";
 
   const startBtn = document.getElementById('startBtn');
   const readerEl = document.getElementById('reader');
@@ -91,22 +91,19 @@
     let success = false;
 
     while (retries > 0 && !success) {
-      // Sonsuz beklemeyi (donmayı) önlemek için 5 saniyelik bir kronometre kuruyoruz
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       try {
-        // Google'ın hatalı önbelleğini atlatmak için sonuna anlık milisaniye değerini ekliyoruz
         const fetchUrl = DEFAULT_SCRIPT_URL + '?action=getStudents&_t=' + new Date().getTime();
 
-        // fetch komutuna kronometremizi bağlıyoruz (signal)
         const res = await fetch(fetchUrl, { 
           method: 'GET',
           mode: 'cors',
           signal: controller.signal 
         });
         
-        clearTimeout(timeoutId); // Zamanında yanıt geldiyse kronometreyi durdur
+        clearTimeout(timeoutId); 
         
         const textData = await res.text();
         const data = JSON.parse(textData);
@@ -123,12 +120,12 @@
         }
 
       } catch(err) {
-        clearTimeout(timeoutId); // Hata alınırsa veya iptal olursa kronometreyi sıfırla
+        clearTimeout(timeoutId);
         retries--;
         
         if (retries > 0) {
           startBtn.innerText = `⏳ Sunucu gecikti, tekrar deneniyor... (Kalan: ${retries})`;
-          await new Promise(r => setTimeout(r, 1500)); // Yeni denemeden önce 1.5 saniye bekle
+          await new Promise(r => setTimeout(r, 1500)); 
         } else {
           setResult('err', 'Google Sunucularına ulaşılamıyor. Lütfen sayfayı yenileyin veya internetinizi kontrol edin.');
           startBtn.innerText = "❌ Bağlantı Hatası";
@@ -137,8 +134,28 @@
     }
   });
 
+  function playFeedback(type) {
+    if ('vibrate' in navigator) {
+      if (type === 'ok') navigator.vibrate([100, 50, 100]);
+      else if (type === 'warn') navigator.vibrate([200]);
+      else if (type === 'err') navigator.vibrate([300, 100, 300]);
+    }
+  }
+
+  function setResult(state, html) {
+    resultEl.className = 'result ' + state;
+    resultEl.innerHTML = html;
+  }
+
+  function addLog(name, time, status) {
+    const li = document.createElement('li');
+    const symbol = status === 'ok' ? '✅' : status === 'warn' ? '⚠️' : '❌';
+    li.innerHTML = `<span>${symbol} <b>${name}</b></span><span>${time}</span>`;
+    logList.insertBefore(li, logList.firstChild);
+  }
+
   // 2. ADIM: KAMERAYI BAŞLAT
- startBtn.addEventListener('click', async () => {
+  startBtn.addEventListener('click', async () => {
   startBtn.classList.add('hidden');
   readerEl.classList.remove('hidden');
   setResult('idle', 'Kamera açılıyor...');
@@ -152,11 +169,9 @@
   };
 
   try {
-    // 1. Önce standart yöntemi dene (Android'de zaten sorunsuz çalışıyor)
     await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
     setResult('idle', 'QR kod okutulmayı bekliyor...');
   } catch (firstErr) {
-    // 2. Başarısız olursa (genelde bazı iPhone modellerinde), kamerayı listeden seç
     try {
       const cameras = await Html5Qrcode.getCameras();
       if (!cameras || cameras.length === 0) throw new Error('Kamera bulunamadı');
