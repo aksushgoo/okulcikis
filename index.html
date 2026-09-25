@@ -88,13 +88,33 @@
   let isProcessing = false;
 
   // 1. ADIM: SAYFA AÇILDIĞINDA FİREBASE'DEN LİSTEYİ İNDİR (Milisaniyeler Sürer)
+    function getTodayStr() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   window.addEventListener('DOMContentLoaded', async () => {
     try {
-      const res = await fetch(FIREBASE_DB_URL + 'students.json');
-      const data = await res.json();
-      
-      if(data) {
-        studentsDb = data;
+      const todayStr = getTodayStr();
+      const [studentsRes, statusRes] = await Promise.all([
+        fetch(FIREBASE_DB_URL + 'students.json'),
+        fetch(FIREBASE_DB_URL + 'status/' + todayStr + '.json')
+      ]);
+      const studentsData = await studentsRes.json();
+      const statusData = await statusRes.json();
+
+      if (studentsData) {
+        studentsDb = {};
+        for (const id in studentsData) {
+          studentsDb[id] = {
+            name: studentsData[id].name,
+            group: studentsData[id].group,
+            scannedToday: !!(statusData && statusData[id])
+          };
+        }
         isDbLoaded = true;
         setResult('ok', '✅ Öğrenci listesi ışık hızıyla yüklendi!');
         startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
@@ -205,10 +225,10 @@
       addLog(student.name, nowTime, 'ok');
 
       // İşlem A: Arka planda Firebase'i hızlıca kilitle (sayfa yenilense bile tekrar çıkamasın diye)
-      fetch(FIREBASE_DB_URL + 'students/' + encodeURIComponent(id) + '.json', {
-        method: 'PATCH',
+            fetch(FIREBASE_DB_URL + 'status/' + getTodayStr() + '/' + encodeURIComponent(id) + '.json', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scannedToday: true })
+        body: JSON.stringify(true)
       }).catch(e => console.log("Firebase yazma hatası", e));
 
       // İşlem B: Arka planda sessizce Google Sheets'e saati yaz (Arşiv için)
