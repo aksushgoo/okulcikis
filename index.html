@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Öğrenci Çıkış Kontrolü (Hızlı Mod)</title>
+<title>Öğrenci Çıkış Kontrolü (Işık Hızı)</title>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root {
@@ -70,6 +70,7 @@
   </div>
 </main>
 
+<script>
 (function(){
   // BURA ÇOK ÖNEMLİ: Yeni Firebase Veritabanı Linkimiz
   const FIREBASE_DB_URL = "https://okulcikistest-default-rtdb.firebaseio.com/";
@@ -87,7 +88,6 @@
   // 1. ADIM: SAYFA AÇILDIĞINDA FİREBASE'DEN LİSTEYİ İNDİR (Milisaniyeler Sürer)
   window.addEventListener('DOMContentLoaded', async () => {
     try {
-      // Firebase'den veri çekerken linkin sonuna .json eklemek kuraldır
       const res = await fetch(FIREBASE_DB_URL + 'students.json');
       const data = await res.json();
       
@@ -173,7 +173,7 @@
     }
 
     // 2. Cuma Namazı Çıkış Kontrolü
-    const todayDay = new Date().getDay(); // 0=Pazar, 1=Pzt ... 5=Cuma
+    const todayDay = new Date().getDay(); 
     if (student.group === 'Cuma' && todayDay !== 5) {
       playFeedback('err');
       setResult('err', `<div class="name">${student.name}</div><div class="meta" style="font-weight:bold; margin-top:5px;">⚠️ Bu öğrenci SADECE Cuma günleri çıkabilir!</div>`);
@@ -198,11 +198,11 @@
     // 4. İlk Çıkış (Başarılı)
     else {
       playFeedback('ok');
-      student.scannedToday = true; // Telefon hafızasında anında güncelle
+      student.scannedToday = true; 
       setResult('ok', `<div class="name">${student.name}</div><div>✅ ÇIKABİLİR!</div>`);
       addLog(student.name, nowTime, 'ok');
 
-      // Arka planda Firebase'i güncelle (Sadece okutulan öğrencinin scannedToday değerini true yap)
+      // Arka planda Firebase'i güncelle
       fetch(FIREBASE_DB_URL + 'students/' + encodeURIComponent(id) + '.json', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -211,5 +211,6 @@
     }
   }
 })();
+</script>
 </body>
 </html>
