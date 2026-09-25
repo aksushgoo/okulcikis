@@ -64,6 +64,8 @@
 
   <div class="result idle" id="result">Öğrenci listesinin inmesi bekleniyor...</div>
 
+    <div id="archiveWarning" class="hidden" style="background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 0.85rem; text-align:center;"></div>
+
   <div class="log">
     <h2>Son Taramalar</h2>
     <ul id="logList"></ul>
@@ -117,7 +119,7 @@
         }
         isDbLoaded = true;
         setResult('ok', '✅ Öğrenci listesi ışık hızıyla yüklendi!');
-        startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
+        startBtn.innerText = "🎥 Kamerayı Başlat";
         startBtn.disabled = false;
       } else {
         setResult('err', 'Veritabanı boş veya ulaşılamadı.');
@@ -140,6 +142,15 @@
     resultEl.innerHTML = html;
   }
 
+  let archiveWarnTimeout = null;
+  function showArchiveWarning(msg) {
+    const el = document.getElementById('archiveWarning');
+    el.textContent = '⚠️ ' + msg;
+    el.classList.remove('hidden');
+    clearTimeout(archiveWarnTimeout);
+    archiveWarnTimeout = setTimeout(() => el.classList.add('hidden'), 6000);
+  }
+  
   function addLog(name, time, status) {
     const li = document.createElement('li');
     const symbol = status === 'ok' ? '✅' : status === 'warn' ? '⚠️' : '❌';
@@ -232,9 +243,19 @@
       }).catch(e => console.log("Firebase yazma hatası", e));
 
       // İşlem B: Arka planda sessizce Google Sheets'e saati yaz (Arşiv için)
-      fetch(GOOGLE_SHEETS_URL + '?action=logScan&id=' + encodeURIComponent(id), {
+            fetch(GOOGLE_SHEETS_URL + '?action=logScan&id=' + encodeURIComponent(id), {
         method: 'GET', mode: 'cors', credentials: 'omit'
-      }).catch(e => console.log("Google Sheets yazma gecikti", e));
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (!res.success) {
+            showArchiveWarning(student.name + ': arşiv kaydı yapılamadı (' + (res.error || 'bilinmeyen hata') + ')');
+          }
+        })
+        .catch(e => {
+          console.log("Google Sheets yazma gecikti", e);
+          showArchiveWarning(student.name + ': arşiv sunucusuna ulaşılamadı.');
+        });
     }
   }
 })();
