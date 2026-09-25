@@ -84,45 +84,51 @@
   let isDbLoaded = false;
   let isProcessing = false;
 
-  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR
+  // 1. ADIM: SAYFA AÇILDIĞINDA ÖĞRENCİ LİSTESİNİ İNDİR (Güçlendirilmiş)
   window.addEventListener('DOMContentLoaded', async () => {
-    try {
-      const res = await fetch(DEFAULT_SCRIPT_URL + '?action=getStudents', { method: 'GET', mode: 'cors', credentials: 'omit' });
-      const data = await res.json();
-      
-      if(data.success) {
-        studentsDb = data.students;
-        isDbLoaded = true;
-        setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
-        startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
-        startBtn.disabled = false;
-      } else {
-        setResult('err', 'Liste alınamadı: ' + data.error);
+    let retries = 3; // Başarısız olursa 3 kez tekrar deneyecek
+    let success = false;
+
+    while (retries > 0 && !success) {
+      try {
+        const res = await fetch(DEFAULT_SCRIPT_URL + '?action=getStudents', { 
+          method: 'GET', 
+          mode: 'cors', 
+          credentials: 'omit' 
+        });
+        
+        // Google bazen hata anında JSON yerine HTML sayfası döndürür, bu da sistemi çökertir.
+        // Bu yüzden veriyi önce düz metin (text) olarak alıp kontrol ediyoruz.
+        const textData = await res.text();
+        
+        try {
+          const data = JSON.parse(textData);
+          if(data.success) {
+            studentsDb = data.students;
+            isDbLoaded = true;
+            success = true; // Başarılı oldu, döngüyü kır
+            setResult('ok', '✅ Öğrenci listesi telefona yüklendi. Hızlı taramaya hazır!');
+            startBtn.innerText = "🎥 Kamerayı Başlat (Otomatik Tarama)";
+            startBtn.disabled = false;
+          } else {
+            throw new Error(data.error || "Sunucu listesi alınamadı.");
+          }
+        } catch (parseErr) {
+          throw new Error("Google sunucusundan geçersiz yanıt geldi.");
+        }
+
+      } catch(err) {
+        retries--;
+        if (retries > 0) {
+          startBtn.innerText = `⏳ Ağ zayıf, tekrar deneniyor... (Kalan: ${retries})`;
+          await new Promise(r => setTimeout(r, 2000)); // Yeni denemeden önce 2 saniye bekle
+        } else {
+          setResult('err', 'İnternet bağlantısı koptu veya sunucu yanıt vermiyor. Lütfen sayfayı yenileyin.');
+          startBtn.innerText = "❌ Bağlantı Hatası";
+        }
       }
-    } catch(err) {
-      setResult('err', 'İnternet bağlantısı koptu. Lütfen sayfayı yenileyin.');
     }
   });
-
-  function playFeedback(type) {
-    if ('vibrate' in navigator) {
-      if (type === 'ok') navigator.vibrate([100, 50, 100]);
-      else if (type === 'warn') navigator.vibrate([200]);
-      else if (type === 'err') navigator.vibrate([300, 100, 300]);
-    }
-  }
-
-  function setResult(state, html) {
-    resultEl.className = 'result ' + state;
-    resultEl.innerHTML = html;
-  }
-
-  function addLog(name, time, status) {
-    const li = document.createElement('li');
-    const symbol = status === 'ok' ? '✅' : status === 'warn' ? '⚠️' : '❌';
-    li.innerHTML = `<span>${symbol} <b>${name}</b></span><span>${time}</span>`;
-    logList.insertBefore(li, logList.firstChild);
-  }
 
   // 2. ADIM: KAMERAYI BAŞLAT
  startBtn.addEventListener('click', async () => {
