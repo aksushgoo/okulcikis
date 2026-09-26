@@ -46,31 +46,9 @@
   .log ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto; }
   .log li { display: flex; justify-content: space-between; font-size: 0.9rem; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
   .hidden { display: none !important; }
-
-  #lockOverlay {
-    position: fixed; inset: 0; background: var(--paper); z-index: 9999;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; padding: 20px;
-  }
-  #lockOverlay .lock-icon { font-size: 2.2rem; }
-  #lockOverlay .lock-title { font-weight: 600; font-size: 1.05rem; text-align: center; }
-  #lockPinInput {
-    padding: 14px; border-radius: 10px; border: 1px solid var(--line);
-    font-size: 1.2rem; text-align: center; width: 220px; letter-spacing: 4px;
-    background: var(--paper); color: var(--ink);
-  }
-  #lockError { color: var(--err); font-size: 0.85rem; min-height: 1.2em; }
 </style>
 </head>
 <body>
-
-<div id="lockOverlay">
-  <div class="lock-icon">🔒</div>
-  <div class="lock-title">Devam etmek için şifreyi girin</div>
-  <input type="password" id="lockPinInput" inputmode="numeric" placeholder="Şifre" autocomplete="off">
-  <button class="bigbtn" id="lockSubmitBtn" style="width:220px;">Giriş Yap</button>
-  <div id="lockError"></div>
-</div>
 
 <main>
   <header>
@@ -123,42 +101,6 @@
     return first + ' ' + last.charAt(0) + '***';
   }
 
-  // KİLİT EKRANI: Kameraya/panele erişmeden önce şifre sorulur
-  const lockOverlay = document.getElementById('lockOverlay');
-  const lockPinInput = document.getElementById('lockPinInput');
-  const lockSubmitBtn = document.getElementById('lockSubmitBtn');
-  const lockError = document.getElementById('lockError');
-
-  // localStorage: tarayıcı kapatılıp açılsa bile kilidi hatırlar (sessionStorage'ın aksine)
-  if (localStorage.getItem('cikisUnlocked') === 'yes') {
-    lockOverlay.classList.add('hidden');
-  }
-
-  async function tryUnlock() {
-    const pin = lockPinInput.value.trim();
-    if (!pin) return;
-    lockSubmitBtn.disabled = true;
-    lockError.textContent = '';
-    try {
-      const res = await fetch(GOOGLE_SHEETS_URL + '?action=checkPin&pin=' + encodeURIComponent(pin));
-      const data = await res.json();
-      if (data.success) {
-        localStorage.setItem('cikisUnlocked', 'yes');
-        lockOverlay.classList.add('hidden');
-      } else {
-        lockError.textContent = 'Yanlış şifre, tekrar deneyin.';
-        lockPinInput.value = '';
-        lockPinInput.focus();
-      }
-    } catch (err) {
-      lockError.textContent = 'Bağlantı hatası, tekrar deneyin.';
-    }
-    lockSubmitBtn.disabled = false;
-  }
-
-  lockSubmitBtn.addEventListener('click', tryUnlock);
-  lockPinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-  
   let studentsDb = {};
   let isDbLoaded = false;
   let isProcessing = false;
