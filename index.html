@@ -475,7 +475,7 @@
   async function handleId(id) {
     if (!isDbLoaded) return;
 
-    const student = studentsDb[id];
+    const student = Object.prototype.hasOwnProperty.call(studentsDb, id) ? studentsDb[id] : null;
     const nowTime = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
     // 1. Öğrenci Bulunamadı
