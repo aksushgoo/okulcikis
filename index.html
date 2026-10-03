@@ -29,6 +29,11 @@
   .bigbtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .linkbtn { background: none; border: none; color: var(--accent); text-decoration: underline; font-size: 0.85rem; cursor: pointer; padding: 4px; align-self: center; }
 
+  .panel { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .panel h2 { font-size: 1rem; margin: 0; }
+  .field { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid var(--line); font-size: 1rem; background: var(--paper); color: var(--ink); }
+  .formerr { color: var(--err); font-size: 0.9rem; min-height: 1.2em; }
+
   #reader { width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); min-height: 220px; background: #000; }
   #reader video { border-radius: 12px; }
   #reader img, #reader__dashboard_section_csr button { display: none !important; }
@@ -53,7 +58,17 @@
 <main>
   <header>
     <h1>Öğrenci Çıkış Kontrolü</h1>
+    <button class="linkbtn hidden" id="logoutBtn" type="button">Oturumu kapat</button>
   </header>
+
+  <!-- Kapı hesabı girişi: cihazda yalnızca ilk kez veya oturum kapatıldığında görünür -->
+  <form class="panel hidden" id="loginBox">
+    <h2>🔐 Kapı hesabı girişi</h2>
+    <input class="field" type="email" id="loginEmail" name="email" autocomplete="username" placeholder="E-posta" required>
+    <input class="field" type="password" id="loginPass" name="password" autocomplete="current-password" placeholder="Şifre" required>
+    <button class="bigbtn" type="submit" id="loginBtn">Giriş yap</button>
+    <div class="formerr" id="loginErr"></div>
+  </form>
 
   <button class="bigbtn" id="startBtn" disabled>⏳ Liste Yükleniyor...</button>
 
@@ -64,9 +79,9 @@
     <button class="bigbtn" id="manualSubmitBtn" style="width:auto; padding:14px 20px;">Gönder</button>
   </div>
 
-  <div class="result idle" id="result">Öğrenci listesinin inmesi bekleniyor...</div>
+  <div class="result idle" id="result">Oturum kontrol ediliyor...</div>
 
-    <div id="archiveWarning" class="hidden" style="background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 0.85rem; text-align:center;"></div>
+  <div id="archiveWarning" class="hidden" style="background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 0.85rem; text-align:center;"></div>
 
   <div class="log">
     <h2>Son Taramalar</h2>
@@ -76,10 +91,15 @@
 
 <script>
 (function(){
-  // 1. Yeni Hızlı Firebase Veritabanı Linkimiz
+  // ====== AYARLAR ======
   const FIREBASE_DB_URL = "https://okulcikistest-default-rtdb.firebaseio.com/";
-  // 2. Sizin Gönderdiğiniz Yeni Google Sheets Linki
+  // Firebase web config'indeki apiKey (herkese açık bilgidir, gizli değil)
+  const FIREBASE_API_KEY = "AIzaSyCVew7fJ7qCPYqs18mMyKmyGyD-5F256nY";
   const GOOGLE_SHEETS_URL = "https://script.google.com/macros/s/AKfycbxIGMAEFvS_UUP6EKfoAtlPii53XxReOOSmiej9OJ0FOCPwesb3VZkYr5Zejrf-Lt00JA/exec";
+
+  const SIGNIN_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + FIREBASE_API_KEY;
+  const REFRESH_URL = 'https://securetoken.googleapis.com/v1/token?key=' + FIREBASE_API_KEY;
+  const SESSION_KEY = 'kapiOturumV1';
 
   const startBtn = document.getElementById('startBtn');
   const readerEl = document.getElementById('reader');
@@ -89,9 +109,23 @@
   const manualEntry = document.getElementById('manualEntry');
   const manualIdInput = document.getElementById('manualIdInput');
   const manualSubmitBtn = document.getElementById('manualSubmitBtn');
+  const loginBox = document.getElementById('loginBox');
+  const loginEmail = document.getElementById('loginEmail');
+  const loginPass = document.getElementById('loginPass');
+  const loginBtn = document.getElementById('loginBtn');
+  const loginErr = document.getElementById('loginErr');
+  const logoutBtn = document.getElementById('logoutBtn');
   const html5QrCode = new Html5Qrcode("reader");
 
+  // HTML'e basılacak metinleri güvenli hale getirir (veritabanından gelen isimler için ek önlem)
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // İSİM GİZLEME: Ekranda sadece ad + soyadın ilk harfi gösterilir (arşivde tam isim kalır)
+  // Not: Apps Script zaten maskeli isim gönderiyor, bu ikinci güvenlik katmanı.
   function maskName(fullName) {
     if (!fullName) return fullName;
     const parts = String(fullName).trim().split(/\s+/);
@@ -105,22 +139,121 @@
   let isDbLoaded = false;
   let isProcessing = false;
 
-  // 1. ADIM: SAYFA AÇILDIĞINDA FİREBASE'DEN LİSTEYİ İNDİR (Milisaniyeler Sürer)
-    function getTodayStr() {
+  // ====== OTURUM (Firebase Auth REST) ======
+  // Şifre cihazda saklanmaz; yalnızca yenileme anahtarı (refresh token) saklanır.
+  // Kapıdaki taramada ağ beklemesi yoktur: token bellekte hazır tutulur, 10 dk kala arka planda yenilenir.
+  let idToken = null;
+  let tokenExp = 0;
+  let refreshTok = null;
+  let refreshing = null;
+
+  function applyTokens(id, refresh, expiresInSec) {
+    idToken = id;
+    refreshTok = refresh;
+    tokenExp = Date.now() + Number(expiresInSec) * 1000;
+    try { localStorage.setItem(SESSION_KEY, refresh); } catch (e) {}
+  }
+
+  function clearSession() {
+    idToken = null; refreshTok = null; tokenExp = 0;
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+  }
+
+  function loginMessage(code) {
+    if (/INVALID_LOGIN_CREDENTIALS|INVALID_PASSWORD|EMAIL_NOT_FOUND/.test(code)) return 'E-posta veya şifre hatalı.';
+    if (/TOO_MANY_ATTEMPTS/.test(code)) return 'Çok fazla deneme yapıldı, biraz bekleyip tekrar deneyin.';
+    if (/USER_DISABLED/.test(code)) return 'Bu hesap devre dışı bırakılmış.';
+    return 'Giriş yapılamadı: ' + (code || 'bilinmeyen hata');
+  }
+
+  async function signIn(email, password) {
+    const r = await fetch(SIGNIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password, returnSecureToken: true })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(loginMessage((j.error && j.error.message) || ''));
+    applyTokens(j.idToken, j.refreshToken, j.expiresIn);
+  }
+
+  function refreshIdToken() {
+    if (!refreshTok) { const e = new Error('Oturum yok'); e.fatal = true; return Promise.reject(e); }
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      try {
+        const r = await fetch(REFRESH_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refreshTok)
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          const e = new Error((j.error && j.error.message) || 'Oturum yenilenemedi');
+          e.fatal = r.status >= 400 && r.status < 500; // 4xx: oturum geçersiz, 5xx/ağ: geçici
+          throw e;
+        }
+        applyTokens(j.id_token, j.refresh_token, j.expires_in);
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
+  }
+
+  // Normalde bellekteki token anında döner (ağ isteği yok)
+  async function getToken(force) {
+    if (!force && idToken && Date.now() < tokenExp - 120000) return idToken;
+    await refreshIdToken();
+    return idToken;
+  }
+
+  setInterval(function() {
+    if (refreshTok && idToken && Date.now() > tokenExp - 10 * 60 * 1000) {
+      refreshIdToken().catch(function() {});
+    }
+  }, 60 * 1000);
+
+  // Yetkili Firebase yazma (yalnızca "yeni kayıt" kuralına uyar)
+  async function fbPut(path, value, force) {
+    const tok = await getToken(force);
+    return fetch(FIREBASE_DB_URL + path + '.json?auth=' + encodeURIComponent(tok), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value)
+    });
+  }
+
+  // ====== LİSTE YÜKLEME ======
+  function getTodayStr() {
     const d = new Date();
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+    return y + '-' + m + '-' + day;
   }
 
-  window.addEventListener('DOMContentLoaded', async () => {
+  async function loadData() {
+    setResult('idle', 'Öğrenci listesi indiriliyor...');
     try {
+      const tok = await getToken();
       const todayStr = getTodayStr();
+      const q = '.json?auth=' + encodeURIComponent(tok);
       const [studentsRes, statusRes] = await Promise.all([
-        fetch(FIREBASE_DB_URL + 'students.json'),
-        fetch(FIREBASE_DB_URL + 'status/' + todayStr + '.json')
+        fetch(FIREBASE_DB_URL + 'students' + q),
+        fetch(FIREBASE_DB_URL + 'status/' + todayStr + q)
       ]);
+
+      if (!studentsRes.ok || !statusRes.ok) {
+        const code = !studentsRes.ok ? studentsRes.status : statusRes.status;
+        if (code === 401 || code === 403) {
+          setResult('err', 'Bu hesabın veritabanına erişim yetkisi yok. Firebase kurallarındaki UID\'yi kontrol edin.');
+        } else {
+          setResult('err', 'Veritabanına ulaşılamadı (' + code + '). Lütfen sayfayı yenileyin.');
+        }
+        return;
+      }
+
       const studentsData = await studentsRes.json();
       const statusData = await statusRes.json();
 
@@ -137,14 +270,78 @@
         setResult('ok', '✅ Öğrenci listesi yüklendi!');
         startBtn.innerText = "🎥 Kamerayı Başlat";
         startBtn.disabled = false;
+        startBtn.classList.remove('hidden');
       } else {
         setResult('err', 'Veritabanı boş veya ulaşılamadı.');
       }
-    } catch(err) {
+    } catch (err) {
       setResult('err', 'İnternet bağlantısı koptu. Lütfen sayfayı yenileyin.');
+    }
+  }
+
+  async function startSession() {
+    loginBox.classList.add('hidden');
+    logoutBtn.classList.remove('hidden');
+    startBtn.classList.remove('hidden');
+    startBtn.disabled = true;
+    startBtn.innerText = "⏳ Liste Yükleniyor...";
+    await loadData();
+  }
+
+  function showLogin(msg) {
+    startBtn.classList.add('hidden');
+    logoutBtn.classList.add('hidden');
+    loginBox.classList.remove('hidden');
+    loginErr.textContent = msg || '';
+    setResult('idle', 'Önce kapı hesabıyla giriş yapın.');
+  }
+
+  async function init() {
+    let saved = null;
+    try { saved = localStorage.getItem(SESSION_KEY); } catch (e) {}
+    if (!saved) { showLogin(); return; }
+
+    refreshTok = saved;
+    setResult('idle', 'Oturum açılıyor...');
+    try {
+      await refreshIdToken();
+    } catch (err) {
+      if (err.fatal) {
+        clearSession();
+        showLogin('Oturum süresi dolmuş, tekrar giriş yapın.');
+      } else {
+        setResult('err', 'İnternet bağlantısı yok. Bağlanınca sayfayı yenileyin.');
+      }
+      return;
+    }
+    await startSession();
+  }
+
+  loginBox.addEventListener('submit', async function(ev) {
+    ev.preventDefault();
+    loginErr.textContent = '';
+    loginBtn.disabled = true;
+    loginBtn.textContent = '⏳ Giriş yapılıyor...';
+    try {
+      await signIn(loginEmail.value.trim(), loginPass.value);
+      loginPass.value = '';
+      await startSession();
+    } catch (err) {
+      loginErr.textContent = (err instanceof TypeError) ? 'İnternet bağlantısı yok.' : err.message;
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Giriş yap';
     }
   });
 
+  logoutBtn.addEventListener('click', function() {
+    clearSession();
+    location.reload();
+  });
+
+  window.addEventListener('DOMContentLoaded', init);
+
+  // ====== ARAYÜZ YARDIMCILARI ======
   function playFeedback(type) {
     if ('vibrate' in navigator) {
       if (type === 'ok') navigator.vibrate([100, 50, 100]);
@@ -166,11 +363,12 @@
     clearTimeout(archiveWarnTimeout);
     archiveWarnTimeout = setTimeout(() => el.classList.add('hidden'), 6000);
   }
-  
+
+  // name parametresi çağıran tarafta esc() ile temizlenmiş olmalı
   function addLog(name, time, status) {
     const li = document.createElement('li');
     const symbol = status === 'ok' ? '✅' : status === 'warn' ? '⚠️' : '❌';
-    li.innerHTML = `<span>${symbol} <b>${name}</b></span><span>${time}</span>`;
+    li.innerHTML = '<span>' + symbol + ' <b>' + name + '</b></span><span>' + time + '</span>';
     logList.insertBefore(li, logList.firstChild);
   }
 
@@ -195,7 +393,7 @@
     if (e.key === 'Enter') submitManualId();
   });
 
-  // 2. ADIM: KAMERAYI BAŞLAT
+  // ====== KAMERAYI BAŞLAT ======
   startBtn.addEventListener('click', async () => {
     startBtn.classList.add('hidden');
     readerEl.classList.remove('hidden');
@@ -212,7 +410,7 @@
     try {
       await html5QrCode.start({ facingMode: "environment" }, qrConfig, qrCallback, () => {});
       setResult('idle', 'QR kod okutulmayı bekliyor...');
-      manualToggleBtn.classList.remove('hidden'); // Kamera çalışıyor: yedek link elinin altında dursun
+      manualToggleBtn.classList.remove('hidden');
     } catch (firstErr) {
       try {
         const cameras = await Html5Qrcode.getCameras();
@@ -222,10 +420,9 @@
 
         await html5QrCode.start(cameraId, qrConfig, qrCallback, () => {});
         setResult('idle', 'QR kod okutulmayı bekliyor...');
-        manualToggleBtn.classList.remove('hidden'); // Kamera çalışıyor: yedek link elinin altında dursun
+        manualToggleBtn.classList.remove('hidden');
       } catch (secondErr) {
-        setResult('err', 'Kamera başlatılamadı: ' + (secondErr.message || secondErr));
-        // Kamera tamamen başarısız oldu: elle giriş kutusunu otomatik aç
+        setResult('err', 'Kamera başlatılamadı: ' + esc(secondErr.message || secondErr));
         manualToggleBtn.classList.remove('hidden');
         manualEntry.classList.remove('hidden');
         manualIdInput.focus();
@@ -233,35 +430,77 @@
     }
   });
 
-  // 3. ADIM: SIFIR BEKLEME İLE ANINDA KONTROL
+  // ====== ARKA PLAN KAYDI (ekranı bekletmez) ======
+  function syncExit(id, rawName) {
+    const path = 'status/' + getTodayStr() + '/' + encodeURIComponent(id);
+
+    // İşlem A: Firebase kilidi (sayfa yenilense bile tekrar çıkamasın diye)
+    (async () => {
+      try {
+        let res = await fbPut(path, true, false);
+        if (res.status === 401 || res.status === 403) {
+          res = await fbPut(path, true, true); // token süresi dolmuş olabilir: yenileyip bir kez daha dene
+        }
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            showArchiveWarning(rawName + ': çıkış kaydı reddedildi. Başka cihazdan zaten çıkmış olabilir veya oturum geçersiz.');
+          } else {
+            showArchiveWarning(rawName + ': çıkış kilidi kaydedilemedi (' + res.status + ').');
+          }
+        }
+      } catch (e) {
+        showArchiveWarning(rawName + ': Firebase\'e ulaşılamadı, internet bağlantısını kontrol edin.');
+      }
+    })();
+
+    // İşlem B: Google Sheets'e saati yaz (arşiv). Apps Script token'ı doğrular.
+    (async () => {
+      try {
+        const tok = await getToken();
+        const r = await fetch(
+          GOOGLE_SHEETS_URL + '?action=logScan&id=' + encodeURIComponent(id) + '&token=' + encodeURIComponent(tok),
+          { method: 'GET', mode: 'cors', credentials: 'omit' }
+        );
+        const res = await r.json();
+        if (!res.success) {
+          showArchiveWarning(rawName + ': arşiv kaydı yapılamadı (' + (res.error || 'bilinmeyen hata') + ')');
+        }
+      } catch (e) {
+        showArchiveWarning(rawName + ': arşiv sunucusuna ulaşılamadı.');
+      }
+    })();
+  }
+
+  // ====== ANINDA KONTROL (sıfır bekleme) ======
   async function handleId(id) {
-    if(!isDbLoaded) return;
-    
+    if (!isDbLoaded) return;
+
     const student = studentsDb[id];
-    const nowTime = new Date().toLocaleTimeString('tr-TR', {hour:'2-digit', minute:'2-digit'});
+    const nowTime = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
     // 1. Öğrenci Bulunamadı
-    if(!student) {
+    if (!student) {
       playFeedback('err');
       setResult('err', '<div class="name">Kayıt Bulunamadı</div><div class="meta">Böyle bir barkod yok.</div>');
       addLog('Bilinmeyen QR', nowTime, 'err');
       return;
     }
 
-    const displayName = maskName(student.name);
+    const rawName = maskName(student.name) || '';
+    const displayName = esc(rawName);
 
     // 2. Cuma Namazı Çıkış Kontrolü
-    const todayDay = new Date().getDay(); 
+    const todayDay = new Date().getDay();
     if (student.group === 'Cuma' && todayDay !== 5) {
       playFeedback('err');
-      setResult('err', `<div class="name">${displayName}</div><div class="meta" style="font-weight:bold; margin-top:5px;">⚠️ Bu öğrenci SADECE Cuma günleri çıkabilir!</div>`);
+      setResult('err', '<div class="name">' + displayName + '</div><div class="meta" style="font-weight:bold; margin-top:5px;">⚠️ Bu öğrenci SADECE Cuma günleri çıkabilir!</div>');
       addLog(displayName + ' (Sadece Cuma)', nowTime, 'err');
       return;
     }
 
     // 3. Zaten Çıkış Yapmış
-    if(student.scannedToday) {
-      playFeedback('err'); 
+    if (student.scannedToday) {
+      playFeedback('err');
       setResult('err', `
         <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin: -5px 0;">
           <div style="font-size: 2.2rem; line-height: 1;">❗</div>
@@ -273,34 +512,14 @@
       `);
       addLog(displayName, nowTime, 'err');
     }
-    // 4. İlk Çıkış (Başarılı) - HİBRİT KAYIT İŞLEMİ
+    // 4. İlk Çıkış (Başarılı)
     else {
       playFeedback('ok');
       student.scannedToday = true; // Telefon hafızasını anında kilitler (hız için)
-      setResult('ok', `<div class="name">${displayName}</div><div>✅ ÇIKABİLİR!</div>`);
+      setResult('ok', '<div class="name">' + displayName + '</div><div>✅ ÇIKABİLİR!</div>');
       addLog(displayName, nowTime, 'ok');
 
-      // İşlem A: Arka planda Firebase'i hızlıca kilitle (sayfa yenilense bile tekrar çıkamasın diye)
-            fetch(FIREBASE_DB_URL + 'status/' + getTodayStr() + '/' + encodeURIComponent(id) + '.json', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(true)
-      }).catch(e => console.log("Firebase yazma hatası", e));
-
-      // İşlem B: Arka planda sessizce Google Sheets'e saati yaz (Arşiv için)
-            fetch(GOOGLE_SHEETS_URL + '?action=logScan&id=' + encodeURIComponent(id), {
-        method: 'GET', mode: 'cors', credentials: 'omit'
-      })
-        .then(r => r.json())
-        .then(res => {
-          if (!res.success) {
-            showArchiveWarning(displayName + ': arşiv kaydı yapılamadı (' + (res.error || 'bilinmeyen hata') + ')');
-          }
-        })
-        .catch(e => {
-          console.log("Google Sheets yazma gecikti", e);
-          showArchiveWarning(displayName + ': arşiv sunucusuna ulaşılamadı.');
-        });
+      syncExit(id, rawName); // Ekran güncellendi; kayıtlar arka planda gider
     }
   }
 })();
